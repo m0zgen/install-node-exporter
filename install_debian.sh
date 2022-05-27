@@ -57,14 +57,10 @@ WantedBy=multi-user.target' > /etc/systemd/system/node_exporter.service
     systemctl daemon-reload
     systemctl enable --now node_exporter
 
-    if [[ "$1" -eq "auto" ]]; then
-        firewall-cmd --permanent --add-port=9100/tcp
+    if confirm "Setup firewalld to Internal zone? (y/n or enter)"; then
+        firewall-cmd --permanent --add-port=9100/tcp --zone=internal
     else
-        if confirm "Setup firewalld to Internal zone? (y/n or enter)"; then
-            firewall-cmd --permanent --add-port=9100/tcp --zone=internal
-        else
-            firewall-cmd --permanent --add-port=9100/tcp
-        fi
+        firewall-cmd --permanent --add-port=9100/tcp
     fi
 
     firewall-cmd --reload
@@ -86,6 +82,11 @@ echo "node_exporter is installed!"
 }
 
 # ==
+
+if [[ -f /etc/systemd/system/node_exporter.service ]]; then
+    echo -e "Node Exporter already installed. Exit. Bye."
+    exit 1
+fi
 
 # Temporary catalog
 if [[ ! -d "$_install" ]]; then
