@@ -110,6 +110,18 @@ download_node_exporter() {
     rm -rf "$tmp_dir"
 }
 
+detect_nologin_shell() {
+    if [[ -x /usr/sbin/nologin ]]; then
+        echo "/usr/sbin/nologin"
+    elif [[ -x /sbin/nologin ]]; then
+        echo "/sbin/nologin"
+    else
+        echo "/bin/false"
+    fi
+}
+
+NOLOGIN_SHELL="$(detect_nologin_shell)"
+
 create_node_exporter_user() {
     if id "$NODE_EXPORTER_USER" >/dev/null 2>&1; then
         echo "User $NODE_EXPORTER_USER already exists."
@@ -118,14 +130,14 @@ create_node_exporter_user() {
             echo "Group $NODE_EXPORTER_USER already exists. Creating user with existing group..."
             useradd --system \
                 --no-create-home \
-                --shell /usr/sbin/nologin \
+                --shell "$NOLOGIN_SHELL" \
                 --gid "$NODE_EXPORTER_USER" \
                 "$NODE_EXPORTER_USER"
         else
             echo "Creating system user and group: $NODE_EXPORTER_USER"
             useradd --system \
                 --no-create-home \
-                --shell /usr/sbin/nologin \
+                --shell "$NOLOGIN_SHELL" \
                 --user-group \
                 "$NODE_EXPORTER_USER"
         fi
