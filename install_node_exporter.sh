@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Yevgeniy Goncharov aka xck, https://sys-adm.in
-# Install / remove Prometheus Node Exporter on Debian-based distributions
+# Install / remove Prometheus Node Exporter on systemd-based Linux distributions
 
 set -euo pipefail
 
@@ -12,36 +12,71 @@ NODE_EXPORTER_BIN="/usr/local/bin/node_exporter"
 NODE_EXPORTER_USER="node_exporter"
 NODE_EXPORTER_PORT="9100"
 
-SERVER_IP="$(hostname -I | awk '{print $1}')"
+ACTION="install"
+AUTO_YES=false
 
-ACTION="${1:-install}"
+SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+usage() {
+    cat <<EOF
+Usage:
+  sudo $0 install [options]      Install Node Exporter
+  sudo $0 remove [options]       Remove Node Exporter
+  sudo $0 uninstall [options]    Remove Node Exporter
+  sudo $0 status                 Show Node Exporter status
+  sudo $0 help                   Show this help
+
+Default action:
+  install
+
+Options:
+  -y, --yes, --auto, --non-interactive
+      Run without interactive confirmation prompts.
+
+Examples:
+  sudo $0
+  sudo $0 install
+  sudo $0 install -y
+  sudo $0 remove
+  sudo $0 remove -y
+  sudo $0 uninstall --yes
+  sudo $0 status
+EOF
+}
+
+parse_args() {
+    ACTION="install"
+    AUTO_YES=false
+
+    for arg in "$@"; do
+        case "$arg" in
+            install|remove|uninstall|status|help|-h|--help)
+                ACTION="$arg"
+                ;;
+            -y|--yes|--auto|--non-interactive)
+                AUTO_YES=true
+                ;;
+            *)
+                echo "Unknown argument: $arg"
+                echo
+                usage
+                exit 1
+                ;;
+        esac
+    done
+}
 
 confirm() {
+    if [[ "$AUTO_YES" == "true" ]]; then
+        echo "${1:-Are you sure? [y/N]} yes"
+        return 0
+    fi
+
     read -r -p "${1:-Are you sure? [y/N]} " response
     case "$response" in
         [yY][eE][sS]|[yY]) true ;;
         *) false ;;
     esac
-}
-
-usage() {
-    cat <<EOF
-Usage:
-  sudo $0 install      Install Node Exporter
-  sudo $0 remove       Remove Node Exporter
-  sudo $0 uninstall    Remove Node Exporter
-  sudo $0 status       Show Node Exporter status
-  sudo $0 help         Show this help
-
-Default action:
-  install
-
-Examples:
-  sudo $0
-  sudo $0 install
-  sudo $0 remove
-  sudo $0 status
-EOF
 }
 
 require_root() {
@@ -53,7 +88,7 @@ require_root() {
 }
 
 check_dependencies() {
-    local deps=("curl" "wget" "tar" "systemctl" "grep" "cut")
+    local deps=("curl" "wget" "tar" "systemctl" "grep" "cut" "awk" "getent" "useradd")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
@@ -65,14 +100,23 @@ check_dependencies() {
 }
 
 check_existing_installation() {
-    if [[ -f "$SERVICE_FILE" ]] || [[ -x "$NODE_EXPORTER_BIN" ]]; then
-        echo "Node Exporter already appears to be installed."
+    if [[ -f "$SERVICE_FILE" ]]; then
+        echo "Node Exporter service already exists."
         echo "Service file: $SERVICE_FILE"
-        echo "Binary: $NODE_EXPORTER_BIN"
         echo
         echo "Use the following command to remove it:"
         echo "  sudo $0 remove"
         exit 1
+    fi
+}
+
+detect_nologin_shell() {
+    if [[ -x /usr/sbin/nologin ]]; then
+        echo "/usr/sbin/nologin"
+    elif [[ -x /sbin/nologin ]]; then
+        echo "/sbin/nologin"
+    else
+        echo "/bin/false"
     fi
 }
 
@@ -110,19 +154,10 @@ download_node_exporter() {
     rm -rf "$tmp_dir"
 }
 
-detect_nologin_shell() {
-    if [[ -x /usr/sbin/nologin ]]; then
-        echo "/usr/sbin/nologin"
-    elif [[ -x /sbin/nologin ]]; then
-        echo "/sbin/nologin"
-    else
-        echo "/bin/false"
-    fi
-}
-
-NOLOGIN_SHELL="$(detect_nologin_shell)"
-
 create_node_exporter_user() {
+    local nologin_shell
+    nologin_shell="$(detect_nologin_shell)"
+
     if id "$NODE_EXPORTER_USER" >/dev/null 2>&1; then
         echo "User $NODE_EXPORTER_USER already exists."
     else
@@ -130,14 +165,14 @@ create_node_exporter_user() {
             echo "Group $NODE_EXPORTER_USER already exists. Creating user with existing group..."
             useradd --system \
                 --no-create-home \
-                --shell "$NOLOGIN_SHELL" \
+                --shell "$nologin_shell" \
                 --gid "$NODE_EXPORTER_USER" \
                 "$NODE_EXPORTER_USER"
         else
             echo "Creating system user and group: $NODE_EXPORTER_USER"
             useradd --system \
                 --no-create-home \
-                --shell "$NOLOGIN_SHELL" \
+                --shell "$nologin_shell" \
                 --user-group \
                 "$NODE_EXPORTER_USER"
         fi
@@ -189,8 +224,10 @@ setup_firewall() {
     fi
 
     if confirm "Setup firewalld port ${NODE_EXPORTER_PORT}/tcp in internal zone? [y/N]"; then
+        echo "Opening ${NODE_EXPORTER_PORT}/tcp in firewalld internal zone..."
         firewall-cmd --permanent --zone=internal --add-port="${NODE_EXPORTER_PORT}/tcp"
     else
+        echo "Opening ${NODE_EXPORTER_PORT}/tcp in firewalld default zone..."
         firewall-cmd --permanent --add-port="${NODE_EXPORTER_PORT}/tcp"
     fi
 
@@ -243,7 +280,7 @@ show_suggestion() {
 Or add this server:
 
     - targets:
-        - '${SERVER_IP}:${NODE_EXPORTER_PORT}'
+        - '${SERVER_IP:-SERVER_IP}:${NODE_EXPORTER_PORT}'
 
 EOF
 }
@@ -329,8 +366,15 @@ show_status() {
     fi
 
     echo
-    systemctl --no-pager --full status "$SERVICE_NAME" || true
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --no-pager --full status "$SERVICE_NAME" || true
+    else
+        echo "systemctl not found."
+    fi
 }
+
+parse_args "$@"
 
 case "$ACTION" in
     install)
