@@ -114,8 +114,21 @@ create_node_exporter_user() {
     if id "$NODE_EXPORTER_USER" >/dev/null 2>&1; then
         echo "User $NODE_EXPORTER_USER already exists."
     else
-        echo "Creating system user: $NODE_EXPORTER_USER"
-        useradd --system --no-create-home --shell /usr/sbin/nologin "$NODE_EXPORTER_USER"
+        if getent group "$NODE_EXPORTER_USER" >/dev/null 2>&1; then
+            echo "Group $NODE_EXPORTER_USER already exists. Creating user with existing group..."
+            useradd --system \
+                --no-create-home \
+                --shell /usr/sbin/nologin \
+                --gid "$NODE_EXPORTER_USER" \
+                "$NODE_EXPORTER_USER"
+        else
+            echo "Creating system user and group: $NODE_EXPORTER_USER"
+            useradd --system \
+                --no-create-home \
+                --shell /usr/sbin/nologin \
+                --user-group \
+                "$NODE_EXPORTER_USER"
+        fi
     fi
 
     chown "$NODE_EXPORTER_USER:$NODE_EXPORTER_USER" "$NODE_EXPORTER_BIN"
