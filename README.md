@@ -439,6 +439,10 @@ node-exporter-installer/
 └── LICENSE
 ```
 
-## Author
+## License
+
+This project is licensed under the MIT License.
+
+Copyright (c) 2026 Yevgeniy G.
 
 https://sys-adm.in
